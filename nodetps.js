@@ -151,19 +151,6 @@ function includeUrl(req) {
     return false;
 }
 
-function convertCountObjToPercentObj(countObj, totalCount) {
-    var percentObj = {};
-    for(var key in countObj) {
-        var temp;
-        if(totalCount != 0) {
-            temp = countObj[i] / totalCount * 100;
-        } else {
-            temp = 0;
-        }
-        percentObj[countObj[i]] = Number(temp.toFixed(2));
-    }
-    return percentView;
-}
 function convertCountArrayToPercentRangeObj(countAccum, totalCount, range) {
     var percentObj = {};
     for(var i = 0; i < countAccum.length; i++) {
@@ -188,6 +175,19 @@ function convertArrayToRangeObj(dataAccum, range) {
         obj[mills.toString()] = value;
     }
     return obj;
+}
+function convertMySQLResultToFormattedPercentRangeObj(dbResult, totalCount) {
+    var percentObj = {};
+    for(var i in dbResult) {
+        var temp;
+        if(totalCount != 0) {
+            temp = dbResult[i].respCount / totalCount * 100;
+        } else {
+            temp = 0;
+        }
+        percentObj["~ " + dbResult[i].respRange + " ms"] = temp.toFixed(2) + " %";
+    }
+    return percentObj;
 }
 
 function makeAccumResult() {
@@ -380,7 +380,8 @@ function collectStatLow(beginTime, endTime, daily) {
         function(callback) {
 
             var queryStr =
-                'select avg(tps), avg(avg_resp), sum(total_elapsed), sum(total_count) ' +
+                'select format(avg(tps),2) avgTps, format(avg(avg_resp),2) avgRespMillis, ' +
+                'format(sum(total_elapsed),2) totalElapsedMillis, sum(total_count) totalCount' +
                 whereStr;
             if(daily) {
                 queryStr += 'group by date(update_time) ';
@@ -390,7 +391,7 @@ function collectStatLow(beginTime, endTime, daily) {
                     console.log("error select " + perfViewTableName + " : " + err);
                     return;
                 }
-                debug('rows selected. ' + perfViewTableName + ' : ' + rows.count);
+                debug('rows selected. ' + perfViewTableName + ' : ' + rows.length);
 
                 perfViewResult = rows;
                 callback(null);
@@ -399,8 +400,8 @@ function collectStatLow(beginTime, endTime, daily) {
         },
         function(callback) {
 
-            var queryRespRange = "select resp_range, sum(resp_count) resp_count" +
-                "from " + respRangeTableName +
+            var queryRespRange = "select resp_range respRange, sum(resp_count) respCount" +
+                " from " + respRangeTableName +
                 ' where update_time between ? and ? ' +
                 ' group by resp_range ';
 
@@ -409,36 +410,33 @@ function collectStatLow(beginTime, endTime, daily) {
                     console.log("error select " + respRangeTableName + " : " + err);
                     return;
                 }
-                debug('rows selected. ' + respRangeTableName + ' : ' + rows.count);
-                var temp = {};
-                for(var i in rows) {
-                    temp[rows[i].resp_range] = rows[i].resp_count;
-                }
-                respRangeResult = temp;
+                debug('rows selected. ' + respRangeTableName + ' : ' + rows.length);
+                respRangeResult = rows;
                 callback(null);
             });
             debug(query.sql);
         },
         function(callback) {
-            var queryUniqueServerCount = "select count(distinct server) server " + whereStr;
+            var queryUniqueServerCount = "select count(distinct server) serverCount " + whereStr;
 
             var query = conn.query(queryUniqueServerCount, [beginTime, endTime], function(err, rows) {
                 if(err) {
                     console.log("error select " + perfViewTableName + " : " + err);
                     return;
                 }
-                debug('rows selected. ' + perfViewTableName + ' : ' + rows.count);
+                debug('rows selected. ' + perfViewTableName + ' : ' + rows.length);
 
-                serverUniqueCount = rows[0].server;
+                serverUniqueCount = rows[0].serverCount;
                 callback(null);
             });
             debug(query.sql);
         },
-        function(err) {
+        function(callback) {
             conn.end(function (err) {
                 if (err) {
                     console.error("error connection close : " + err.stack);
                 }
+                callback(null);
             });
         }
     ], function(err) {
@@ -446,13 +444,13 @@ function collectStatLow(beginTime, endTime, daily) {
         lastResult.from = beginTime;
         lastResult.to = endTime;
 
-        lastResult.total = perfViewResult;
-        lastResult.response = respRangeResult;
+        lastResult.summary = perfViewResult[0];
+        lastResult.rangeOfResponseTime = convertMySQLResultToFormattedPercentRangeObj(respRangeResult, lastResult.summary.totalCount);
 
+        debug(JSON.stringify(lastResult, null, '\t'));
         return lastResult;
     });
 }
-
 
 function setMySQLConnInfo(connInfo) {
     definedOptions.saveToMySQL = connInfo;

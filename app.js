@@ -39,30 +39,14 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 app.use('/', routes);
 app.use('/users', users);
-app._router.stack.forEach(function(r){
-    if (r.route){
-        console.log(r.route.path)
-    }
-})
+
 // catch 404 and forward to error handler
 app.use(function(req, res, next) {
     var err = new Error('Not Found');
     err.status = 404;
     next(err);
 });
-var route, routes = [];
 
-app._router.stack.forEach(function(middleware){
-    if(middleware.route){ // routes registered directly on the app
-        routes.push(middleware.route);
-    } else if(middleware.name === 'router'){ // router middleware
-        middleware.handle.stack.forEach(function(handler){
-            route = handler.route;
-            console.log(route);
-            route && routes.push(route);
-        });
-    }
-});
 // error handlers
 
 // development error handler
