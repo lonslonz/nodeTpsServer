@@ -9,22 +9,6 @@ var url = require('url');
 var mysql = require('mysql');
 var os = require('os');
 var async = require('async');
-/*
-options : {
-    savePeriod : 60 sec,
-    mysql : {
-
-    },
-
-    INCLUDE static
-    ALL
-    CSS
-}
-
-from ~ to :
-tps,
-response time,
-*/
 
 exports = module.exports = nodetps;
 exports.setNodeTps = setNodeTps;
@@ -55,7 +39,6 @@ var totalCount = 0;
 var totalElapsed = 0;
 var countAccum = [];
 var staticFilePattern = "";
-
 
 function setNodeTps(req) {
     req.calcNodeTps = true;
@@ -331,40 +314,108 @@ function calcAvgResp(count, elapsedMills) {
 }
 
 
-/**
- * Work only with MySQL.
- *
- * @param begin
- * @param end
- * @param server if server is null, all servers data collected.
- */
-function collectStatByTime(begin, end, server, group) {
-
-
-}
-function sendDailyReport() {
-
-}
-function collectStat(beginTime, endTime) {
-
-}
 function collectStatDaily(beginTime, endTime) {
-    collectStatLow(beginTime, endTime, true);
+    function postProcess(perfViewResult, respRangeResult) {
+        var summaryArray = [];
+        var respObj = {};
+
+        var tempForResut = {};
+        var j = 0;
+        for(var i in perfViewResult) {
+            var summary = perfViewResult[i];
+            var push = false;
+            summary.rangeOfResponseTime = [];
+            for(;j < respRangeResult.length; j++) {
+                if(summary.beginTime.getTime() == respRangeResult[j].beginTime.getTime()) {
+                    summary.rangeOfResponseTime.push(respRangeResult[j]);
+                    push = true;
+                } else if(summary.beginTime.getTime() < respRangeResult[j].beginTime.getTime()) {
+                    break;
+                } else {
+                    continue;
+                }
+            }
+            if(push) {
+                summaryArray.push(summary);
+            }
+        }
+
+        for(var i in summaryArray) {
+            var rangeObj = convertMySQLResultToFormattedPercentRangeObj(summaryArray[i].rangeOfResponseTime, summary.totalCount);
+            summaryArray[i].rangeOfResponseTime = rangeObj;
+        }
+        debug(JSON.stringify(summaryArray, null, '\t'));
+        return summaryArray;
+    }
+
+    function summarySelectQuery() {
+        var queryStr =
+            'select ' +
+            "date(update_time) beginTime, date(update_time) + interval 1 day endTime, " +
+            'format(avg(tps),2) avgTps, format(avg(avg_resp),2) avgRespMillis, ' +
+            'format(sum(total_elapsed),2) totalElapsedMillis, sum(total_count) totalCount ' +
+            'from ' + perfViewTableName + " " +
+            'where update_time between ? and ? ' +
+            'and total_count > 0 ' +
+            'group by date(update_time) order by date(update_time)';
+        return queryStr;
+    }
+    function respRangeSelectQuery() {
+        var queryStr =
+            "select " +
+            "date(update_time) beginTime, date(update_time) + interval 1 day endTime, " +
+            "resp_range respRange, sum(resp_count) respCount " +
+            "from " + respRangeTableName + " " +
+            'where update_time between ? and ? ' +
+            'group by date(update_time), resp_range order by date(update_time), resp_range';
+        return queryStr;
+    }
+
+    collectStatLow(beginTime, endTime, summarySelectQuery, respRangeSelectQuery, postProcess);
 }
 function collectStatAll(beginTime, endTime) {
-    collectStatLow(beginTime, endTime, false);
+
+    function postProcess(perfViewResult, respRangeResult) {
+        var summary = {};
+
+        summary = perfViewResult[0];
+        summary.rangeOfResponseTime = convertMySQLResultToFormattedPercentRangeObj(respRangeResult, summary.totalCount);
+
+        debug(JSON.stringify(summary, null, '\t'));
+        return summary;
+    }
+
+    function summarySelectQuery() {
+        var queryStr =
+            'select ' +
+            "'" + beginTime + "' beginTime, '" + endTime + "' endTime, " +
+            'format(avg(tps),2) avgTps, format(avg(avg_resp),2) avgRespMillis, ' +
+            'format(sum(total_elapsed),2) totalElapsedMillis, sum(total_count) totalCount ' +
+            'from ' + perfViewTableName + " " +
+            'where update_time between ? and ? ' +
+            'and total_count > 0 ';
+        return queryStr;
+    }
+    function respRangeSelectQuery() {
+        var queryStr =
+            "select " +
+            "'" + beginTime + "' beginTime, '" + endTime + "' endTime, " +
+            "resp_range respRange, sum(resp_count) respCount " +
+            "from " + respRangeTableName + " " +
+            'where update_time between ? and ? ' +
+            'group by resp_range order by resp_range';
+        return queryStr;
+    }
+    collectStatLow(beginTime, endTime, summarySelectQuery, respRangeSelectQuery, postProcess);
 }
 
 
-function collectStatLow(beginTime, endTime, daily) {
+function collectStatLow(beginTime, endTime, summarySelectQueryCallback, respRangeSelectQueryCallback, postProcessCallback) {
     var perfViewResult;
     var serverUniqueCount;
     var respRangeResult;
     var conn = mysql.createConnection(definedOptions.saveToMySQL);
-    var whereStr =
-        ' from ' + perfViewTableName +
-        ' where update_time between ? and ? ' +
-        ' and total_count > 0 ';
+
 
     async.waterfall([
         function(callback) {
@@ -379,14 +430,7 @@ function collectStatLow(beginTime, endTime, daily) {
         },
         function(callback) {
 
-            var queryStr =
-                'select format(avg(tps),2) avgTps, format(avg(avg_resp),2) avgRespMillis, ' +
-                'format(sum(total_elapsed),2) totalElapsedMillis, sum(total_count) totalCount' +
-                whereStr;
-            if(daily) {
-                queryStr += 'group by date(update_time) ';
-            }
-            var query = conn.query(queryStr, [beginTime, endTime], function(err, rows) {
+            var query = conn.query(summarySelectQueryCallback(), [beginTime, endTime, beginTime, endTime], function(err, rows) {
                 if(err) {
                     console.log("error select " + perfViewTableName + " : " + err);
                     return;
@@ -400,12 +444,8 @@ function collectStatLow(beginTime, endTime, daily) {
         },
         function(callback) {
 
-            var queryRespRange = "select resp_range respRange, sum(resp_count) respCount" +
-                " from " + respRangeTableName +
-                ' where update_time between ? and ? ' +
-                ' group by resp_range ';
 
-            var query = conn.query(queryRespRange, [beginTime, endTime], function(err, rows) {
+            var query = conn.query(respRangeSelectQueryCallback(), [beginTime, endTime], function(err, rows) {
                 if(err) {
                     console.log("error select " + respRangeTableName + " : " + err);
                     return;
@@ -417,7 +457,10 @@ function collectStatLow(beginTime, endTime, daily) {
             debug(query.sql);
         },
         function(callback) {
-            var queryUniqueServerCount = "select count(distinct server) serverCount " + whereStr;
+            var queryUniqueServerCount = "select count(distinct server) serverCount " +
+                "from " + perfViewTableName + " " +
+                'where update_time between ? and ? ' +
+                'and total_count > 0 ';
 
             var query = conn.query(queryUniqueServerCount, [beginTime, endTime], function(err, rows) {
                 if(err) {
@@ -440,17 +483,13 @@ function collectStatLow(beginTime, endTime, daily) {
             });
         }
     ], function(err) {
-        var lastResult = {};
-        lastResult.from = beginTime;
-        lastResult.to = endTime;
 
-        lastResult.summary = perfViewResult[0];
-        lastResult.rangeOfResponseTime = convertMySQLResultToFormattedPercentRangeObj(respRangeResult, lastResult.summary.totalCount);
-
-        debug(JSON.stringify(lastResult, null, '\t'));
-        return lastResult;
+        var summary = postProcessCallback(perfViewResult, respRangeResult);
+        return summary;
     });
 }
+
+
 
 function setMySQLConnInfo(connInfo) {
     definedOptions.saveToMySQL = connInfo;

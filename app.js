@@ -12,6 +12,7 @@ var nodetps = require('./nodetps');
 
 var app = express();
 
+
 /*
 
 var t= '/mysearc/test.css';
@@ -71,6 +72,14 @@ app.use(function(err, req, res, next) {
     });
 });
 
-nodetps.collectStatAll('2015-02-03 00:00:00', '2015-02-05 23:59:59');
+var stringifyDate = require('json-stringify-date')
+var curr = new Date();
+var currStr = stringifyDate.stringify(new Date());
+var ttt = new Date();
+console.log(ttt);
+//nodetps.collectStatAll('2015-02-03 00:00:00', '2015-02-05 23:59:59');
+//nodetps.collectStatAll('2015-02-01 00:00:00', '2015-02-01 23:59:59');
+nodetps.collectStatDaily('2015-02-03 00:00:00', '2015-02-09 23:59:59');
+
 //nodetps.collectDailyStat('2015-02-03 00:00:00', '2015-02-03 23:59:59');
 module.exports = app;
