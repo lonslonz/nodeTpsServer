@@ -2,7 +2,7 @@
  * by Jongmin Lee on 15. 1. 29..
  * MIT Licensed
  */
-var debug = require('debug')('nodetps');
+var debug = require('debug')('grus');
 var onFinished = require('on-finished');
 var fs = require('fs');
 var url = require('url');
@@ -10,14 +10,13 @@ var mysql = require('mysql');
 var os = require('os');
 var async = require('async');
 
-exports = module.exports = nodetps;
-exports.setNodeTps = setNodeTps;
+exports = module.exports = grus;
 exports.collectStatDaily = collectStatDaily;
 exports.collectStatAll = collectStatAll;
 
 var optionsDefault  = {
     rangeReponseMillis : [10, 50, 100, 200, 500, 1000, 2000, 5000, 9999999],
-    saveIntervalSec : 5000,
+    saveIntervalSec : 60000,
     writeToConsole : true,
     saveToMySQL : {
         host: 'recopic-test.cmmciovvbbbs.ap-northeast-1.rds.amazonaws.com',
@@ -30,21 +29,17 @@ var optionsDefault  = {
     includeUrlStartWith : ['/'],
     excludeStaticFilesExt : ['css', 'js', 'html', 'htm', 'jpg', 'png', 'gif', 'ico']
 };
+var definedOptions = {};
+var staticFilePatternRegex;
 
 var perfViewTableName = "perf_view";
 var respRangeTableName = "resp_range";
-var definedOptions = {};
 
 var totalCount = 0;
 var totalElapsed = 0;
-var countAccum = [];
-var staticFilePattern = "";
+var countCollected = [];
 
-function setNodeTps(req) {
-    req.calcNodeTps = true;
-}
-
-function nodetps(options, saveCallback) {
+function grus(options) {
     var op = options || {};
 
     for(var i in optionsDefault) {
@@ -56,29 +51,28 @@ function nodetps(options, saveCallback) {
     }
 
     for(var i = 0; i < definedOptions.rangeReponseMillis.length; i++) {
-        countAccum[i] = 0;
+        countCollected[i] = 0;
     }
 
     setInterval(save, definedOptions.saveIntervalSec);
 
-    return function registerReq(req, res, next) {
+    return function setUpGrus(req, res, next) {
         req._reqStart = process.hrtime();
 
         if(!includeUrl(req)) {
             return;
         }
 
-        function addResponse(){
+        function collectResponse(){
 
-            // TODO:filter only restful
             var elapsed = calcElapsed(req._reqStart);
 
-            debug("nodetps : " + req.url + ", elapsed : " + elapsed + ", totalCount = " + totalCount);
-            var i;
-            for(i = 0; i < definedOptions.rangeReponseMillis.length; i++) {
+            var range;
+            for(var i = 0; i < definedOptions.rangeReponseMillis.length; i++) {
 
                 if(elapsed <= definedOptions.rangeReponseMillis[i]) {
-                    countAccum[i]++;
+                    countCollected[i]++;
+                    range = definedOptions.rangeReponseMillis[i];
                     break;
                 } else {
                     continue;
@@ -87,29 +81,30 @@ function nodetps(options, saveCallback) {
 
             totalCount++;
             totalElapsed += elapsed;
+
+            debug("range : " + range + ", elapsed : " + elapsed + ", totalCount = " + totalCount);
         };
 
-        onFinished(res, addResponse);
+        onFinished(res, collectResponse);
 
         next();
     }
 }
 function makeExcludeRegEx() {
-    if(staticFilePattern) {
-        return staticFilePattern;
+    if(staticFilePatternRegex) {
+        return staticFilePatternRegex;
     }
 
     var exclude = optionsDefault.excludeStaticFilesExt;
     for(var i = 0; i < exclude.length; i++) {
         var temp = "\\." + exclude[i];
         if(i == exclude.length - 1) {
-            staticFilePattern += temp;
+            staticFilePatternRegex += temp;
         } else {
-            staticFilePattern += temp + '|'
+            staticFilePatternRegex += temp + '|'
         }
     }
-    debug(staticFilePattern);
-    return staticFilePattern;
+    return staticFilePatternRegex;
 }
 
 function includeUrl(req) {
@@ -134,13 +129,13 @@ function includeUrl(req) {
     return false;
 }
 
-function convertCountArrayToPercentRangeObj(countAccum, totalCount, range) {
+function convertCountArrayToPercentRangeObj(countCollected, totalCount, range) {
     var percentObj = {};
-    for(var i = 0; i < countAccum.length; i++) {
+    for(var i = 0; i < countCollected.length; i++) {
 
         var temp;
         if(totalCount != 0) {
-            temp = countAccum[i] / totalCount * 100;
+            temp = countCollected[i] / totalCount * 100;
         } else {
             temp = 0;
         }
@@ -148,12 +143,12 @@ function convertCountArrayToPercentRangeObj(countAccum, totalCount, range) {
     }
     return percentObj;
 }
-function convertArrayToRangeObj(dataAccum, range) {
+function convertArrayToRangeObj(collected, range) {
 
     var obj = {};
-    for(var i = 0; i < dataAccum.length; i++) {
+    for(var i = 0; i < collected.length; i++) {
         var mills = range[i];
-        var value = dataAccum[i];
+        var value = collected[i];
 
         obj[mills.toString()] = value;
     }
@@ -173,7 +168,7 @@ function convertMySQLResultToFormattedPercentRangeObj(dbResult, totalCount) {
     return percentObj;
 }
 
-function makeAccumResult() {
+function makeCollectingResult() {
     var result = {};
 
     result.server = os.hostname();
@@ -181,12 +176,12 @@ function makeAccumResult() {
     result.totalElapsed = totalElapsed;
     result.tps = calcTps(totalCount, totalElapsed);
     result.avgResp = calcAvgResp(totalCount, totalElapsed);
-    result.countAccum = convertArrayToRangeObj(countAccum, optionsDefault.rangeReponseMillis);
-    result.percentAccum = convertCountArrayToPercentRangeObj(countAccum, totalCount, optionsDefault.rangeReponseMillis);
+    result.countCollected = convertArrayToRangeObj(countCollected, optionsDefault.rangeReponseMillis);
+    result.percentCollected = convertCountArrayToPercentRangeObj(countCollected, totalCount, optionsDefault.rangeReponseMillis);
     return result;
 }
 
-function makeAccumResult4MySQL() {
+function makeCollectingResult4MySQL() {
     var result = {};
     result.perfview = {};
     result.resp_range = [];
@@ -197,10 +192,10 @@ function makeAccumResult4MySQL() {
     result.perfview.tps = calcTps(totalCount, totalElapsed);
     result.perfview.avg_resp = calcAvgResp(totalCount, totalElapsed);
 
-    for(var i = 0; i < countAccum.length; i++) {
+    for(var i = 0; i < countCollected.length; i++) {
         result.resp_range[i] = [];
         result.resp_range[i][1] = optionsDefault.rangeReponseMillis[i];
-        result.resp_range[i][2] = countAccum[i];
+        result.resp_range[i][2] = countCollected[i];
     }
 
     return result;
@@ -213,12 +208,12 @@ function setInsertIdToRespArray(resp_range, insertId) {
 function reset() {
     totalCount = 0;
     totalElapsed = 0;
-    for(var i = 0; i < countAccum.length; i++) {
-        countAccum[i] = 0;
+    for(var i = 0; i < countCollected.length; i++) {
+        countCollected[i] = 0;
     }
 }
 function save() {
-    var message = JSON.stringify(makeAccumResult());
+    var message = JSON.stringify(makeCollectingResult());
 
     if(definedOptions.writeToConsole) {
         process.stdout.write(message + '\n');
@@ -237,7 +232,7 @@ function save() {
 
 function saveToMySQL() {
 
-    var value = makeAccumResult4MySQL();
+    var value = makeCollectingResult4MySQL();
 
     var conn = mysql.createConnection(definedOptions.saveToMySQL);
 
