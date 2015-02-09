@@ -13,24 +13,36 @@ var async = require('async');
 exports = module.exports = grus;
 exports.collectStatDaily = collectStatDaily;
 exports.collectStatAll = collectStatAll;
+exports.convertCountArrayToPercentRangeObj = convertCountArrayToPercentRangeObj;
+
+// for unit testing, private.
+exports.optionsDefault = optionsDefault;
+exports.mergeDefaultAndUserOptions = mergeDefaultAndUserOptions;
+exports.includeUrl = includeUrl;
+exports.makeExcludeRegEx = makeExcludeRegEx;
+exports.convertCountArrayToPercentRangeObj = convertCountArrayToPercentRangeObj;
+exports.convertArrayToRangeObj = convertArrayToRangeObj;
+exports.convertMySQLResultToFormattedPercentRangeObj = convertMySQLResultToFormattedPercentRangeObj;
+exports.makeCollectingResult = makeCollectingResult;
+exports.makeCollectingResult4MySQL = makeCollectingResult4MySQL;
+exports.setTotalElapsed = setTotalElapsed;
+exports.setTotalCount = setTotalCount;
+exports.setCountCollected = setCountCollected;
+exports.calcElapsed = calcElapsed;
+exports.calcTps = calcTps;
+exports.calcAvgResp = calcAvgResp;
 
 var optionsDefault  = {
     rangeReponseMillis : [10, 50, 100, 200, 500, 1000, 2000, 5000, 9999999],
     saveIntervalSec : 60000,
     writeToConsole : true,
-    saveToMySQL : {
-        host: 'recopic-test.cmmciovvbbbs.ap-northeast-1.rds.amazonaws.com',
-        port: 3306,
-        user: 'ubuntu',
-        password: 'reco7788!#%',
-        database: 'grus'
-    },
+    saveToMySQL : null,
     saveToFile : './log.txt',
     includeUrlStartWith : ['/'],
     excludeStaticFilesExt : ['css', 'js', 'html', 'htm', 'jpg', 'png', 'gif', 'ico']
 };
 var definedOptions = {};
-var staticFilePatternRegex;
+var staticFilePatternRegex = "";
 
 var perfViewTableName = "perf_view";
 var respRangeTableName = "resp_range";
@@ -39,16 +51,9 @@ var totalCount = 0;
 var totalElapsed = 0;
 var countCollected = [];
 
-function grus(options) {
-    var op = options || {};
 
-    for(var i in optionsDefault) {
-        if(typeof op[i] == "undefined") {
-            definedOptions[i] = optionsDefault[i];
-        } else {
-            definedOptions[i] = op[i];
-        }
-    }
+function grus(options) {
+    mergeDefaultAndUserOptions(options);
 
     for(var i = 0; i < definedOptions.rangeReponseMillis.length; i++) {
         countCollected[i] = 0;
@@ -95,7 +100,7 @@ function makeExcludeRegEx() {
         return staticFilePatternRegex;
     }
 
-    var exclude = optionsDefault.excludeStaticFilesExt;
+    var exclude = definedOptions.excludeStaticFilesExt;
     for(var i = 0; i < exclude.length; i++) {
         var temp = "\\." + exclude[i];
         if(i == exclude.length - 1) {
@@ -119,7 +124,7 @@ function includeUrl(req) {
         return false;
     }
 
-    var include = optionsDefault.includeUrlStartWith;
+    var include = definedOptions.includeUrlStartWith;
     for(var i = 0; i < include.length; i++) {
         if(path.indexOf(include[i]) == 0) {
             debug('include url : ' + path);
@@ -176,8 +181,8 @@ function makeCollectingResult() {
     result.totalElapsed = totalElapsed;
     result.tps = calcTps(totalCount, totalElapsed);
     result.avgResp = calcAvgResp(totalCount, totalElapsed);
-    result.countCollected = convertArrayToRangeObj(countCollected, optionsDefault.rangeReponseMillis);
-    result.percentCollected = convertCountArrayToPercentRangeObj(countCollected, totalCount, optionsDefault.rangeReponseMillis);
+    result.countCollected = convertArrayToRangeObj(countCollected, definedOptions.rangeReponseMillis);
+    result.percentCollected = convertCountArrayToPercentRangeObj(countCollected, totalCount, definedOptions.rangeReponseMillis);
     return result;
 }
 
@@ -194,7 +199,7 @@ function makeCollectingResult4MySQL() {
 
     for(var i = 0; i < countCollected.length; i++) {
         result.resp_range[i] = [];
-        result.resp_range[i][1] = optionsDefault.rangeReponseMillis[i];
+        result.resp_range[i][1] = definedOptions.rangeReponseMillis[i];
         result.resp_range[i][2] = countCollected[i];
     }
 
@@ -338,6 +343,8 @@ function collectStatDaily(beginTime, endTime) {
         for(var i in summaryArray) {
             var rangeObj = convertMySQLResultToFormattedPercentRangeObj(summaryArray[i].rangeOfResponseTime, summary.totalCount);
             summaryArray[i].rangeOfResponseTime = rangeObj;
+            summaryArray[i].beginTime = convertUtcToFormatted(summaryArray[i].beginTime);
+            summaryArray[i].endTime = convertUtcToFormatted(summaryArray[i].endTime);
         }
         debug(JSON.stringify(summaryArray, null, '\t'));
         return summaryArray;
@@ -368,6 +375,18 @@ function collectStatDaily(beginTime, endTime) {
 
     collectStatLow(beginTime, endTime, summarySelectQuery, respRangeSelectQuery, postProcess);
 }
+
+String.prototype.string = function(len){var s = '', i = 0; while (i++ < len) { s += this; } return s;};
+String.prototype.zf = function(len){return "0".string(len - this.length) + this;};
+Number.prototype.zf = function(len){return this.toString().zf(len);};
+
+function convertUtcToFormatted(dateStr) {
+    var date = new Date(dateStr);
+    var str =
+        date.getFullYear() + "-" + (date.getMonth() + 1).zf(2) + "-" + date.getDate().zf(2) + " " +
+        date.getHours().zf(2) + ":" + date.getMinutes().zf(2) + ":" + date.getSeconds().zf(2);
+    return str;
+}
 function collectStatAll(beginTime, endTime) {
 
     function postProcess(perfViewResult, respRangeResult) {
@@ -375,6 +394,9 @@ function collectStatAll(beginTime, endTime) {
 
         summary = perfViewResult[0];
         summary.rangeOfResponseTime = convertMySQLResultToFormattedPercentRangeObj(respRangeResult, summary.totalCount);
+
+        summary.beginTime = convertUtcToFormatted(summary.beginTime);
+        summary.endTime = convertUtcToFormatted(summary.endTime);
 
         debug(JSON.stringify(summary, null, '\t'));
         return summary;
@@ -484,8 +506,23 @@ function collectStatLow(beginTime, endTime, summarySelectQueryCallback, respRang
     });
 }
 
-
-
-function setMySQLConnInfo(connInfo) {
-    definedOptions.saveToMySQL = connInfo;
+function mergeDefaultAndUserOptions(userOptions) {
+    var op = userOptions || {};
+    for(var i in optionsDefault) {
+        if(typeof op[i] == "undefined") {
+            definedOptions[i] = optionsDefault[i];
+        } else {
+            definedOptions[i] = op[i];
+        }
+    }
+    return definedOptions;
+}
+function setTotalElapsed(elapsed) {
+    totalElapsed = elapsed;
+}
+function setTotalCount(count) {
+    totalCount = count;
+}
+function setCountCollected(collected) {
+    countCollected = collected;
 }

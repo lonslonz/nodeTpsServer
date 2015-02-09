@@ -8,7 +8,7 @@ var bodyParser = require('body-parser');
 var routes = require('./routes/index');
 var users = require('./routes/users');
 
-var nodetps = require('./grus');
+var nodetps = require('./index');
 
 var app = express();
 
@@ -32,7 +32,17 @@ app.set('view engine', 'ejs');
 // uncomment after placing your favicon in /public
 //app.use(favicon(__dirname + '/public/favicon.ico'));
 app.use(logger('dev'));
-app.use(nodetps({writeToConsole:true}));
+
+app.use(nodetps({
+    writeToConsole:true,
+    saveToMySQL: {
+        host: 'recopic-test.cmmciovvbbbs.ap-northeast-1.rds.amazonaws.com',
+        port: 3306,
+        user: 'ubuntu',
+        password: 'reco7788!#%',
+        database: 'grus'
+    }
+}));
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(cookieParser());
@@ -77,7 +87,7 @@ var curr = new Date();
 var currStr = stringifyDate.stringify(new Date());
 var ttt = new Date();
 console.log(ttt);
-//nodetps.collectStatAll('2015-02-03 00:00:00', '2015-02-05 23:59:59');
+nodetps.collectStatAll('2015-02-03 05:00:00', '2015-02-05 23:59:59');
 //nodetps.collectStatAll('2015-02-01 00:00:00', '2015-02-01 23:59:59');
 nodetps.collectStatDaily('2015-02-03 00:00:00', '2015-02-09 23:59:59');
 
